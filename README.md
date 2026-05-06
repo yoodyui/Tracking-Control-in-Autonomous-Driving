@@ -25,7 +25,6 @@ setup_paths
 - `chapter07_model_based/`: TV-LQR and MPC examples.
 - `chapter08_cbf/`: CBF and ECBF safety-filter examples.
 - `helpers/`: shared model, waypoint, distance, CTE, and geometry utilities.
-- `_legacy/`: older exploratory scripts and variants that are not part of the main textbook example sequence.
 
 ## Main Example Scripts
 
@@ -73,7 +72,10 @@ setup_paths
 
 ## Notes
 
-The `_legacy` folder is kept for transparency and future reference, but those
-files are not part of the main companion-code sequence. For classroom use or a
-public GitHub release, the chapter folders and `helpers` folder should be the
-primary material.
+The public companion-code repository is intentionally limited to the chapter
+folders, `helpers`, and `setup_paths.m`. Older exploratory scripts, temporary
+backups, and unused variants are excluded so that the repository follows the
+textbook example sequence clearly.
+
+When adding a new example, place the script in the chapter folder that matches
+the book and put reusable model or geometry routines in `helpers`.
