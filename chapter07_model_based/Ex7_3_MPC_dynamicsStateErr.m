@@ -29,30 +29,51 @@ Tspan = (0:N-1) * Ts;
 [WP, velocities, headings] = waypoints_with_velocity_and_heading(N);
 reference = [WP; headings; velocities];
 
-%% Nominal inputs computed from reference (delta; Sf; Sr)
-U_nom(1,1:N-1) = diff(unwrap(reference(3,:)))./Ts .* (L ./ reference(4,1:end-1)); % steering angle
-U_nom(1,N) = U_nom(1,N-1);
-delta_max = deg2rad(30);
+%% Actuator limits (same acceleration range as in Chapter 6 and Example 7.1)
+a_min = -3; a_max = 2;                 % longitudinal acceleration bounds [m/s^2]
+delta_max = deg2rad(30);               % steering bound [rad]
+Sr_min = m*a_min/(2*Cxr);              % rear slip ratio that gives a_min
+Sr_max = m*a_max/(2*Cxr);              % rear slip ratio that gives a_max
 
-Sf = 0;
-U_nom(2,:) = Sf*ones(size(U_nom(1,:)));
-acceleration_nominal = gradient(velocities, Ts);
+%% Nominal inputs from the reference (path derivatives)
+% The waypoints are spaced by distance, not by time: d(.)/dt = v * d(.)/ds
+s_ref = [0, cumsum(vecnorm(diff(WP, 1, 2)))];        % arc length [m]
+kappa = gradient(unwrap(headings), s_ref);           % curvature d(psi)/ds
 
-Sr = (m .* acceleration_nominal) ./ (2 * Cxr);
-U_nom(3,:) = Sr;
-Sr_min = min(Sr); Sr_max = max(Sr); 
+%% Feasible nominal speed (forward-backward pass along the path)
+% The curvature-based speed profile changes in steps, which no vehicle can
+% follow. The nominal speed is therefore limited so that it can be reached
+% with 80% of the acceleration range; the rest is left to the feedback.
+margin = 0.8;
+ds_c  = [diff(s_ref), norm(WP(:,1) - WP(:,N))];      % distance from waypoint i to i+1 (cyclic)
+v_nom = velocities;                                  % start from the speed limit
+for i = [1:N, 1:N]                                   % forward pass: acceleration limit
+    j = mod(i, N) + 1;                               % (two laps make the profile periodic)
+    v_nom(j) = min(v_nom(j), sqrt(v_nom(i)^2 + 2*margin*a_max*ds_c(i)));
+end
+for i = [N:-1:1, N:-1:1]                             % backward pass: braking limit
+    j = mod(i, N) + 1;
+    v_nom(i) = min(v_nom(i), sqrt(v_nom(j)^2 + 2*margin*abs(a_min)*ds_c(i)));
+end
+a_nom = v_nom .* gradient(v_nom, s_ref);             % a = v dv/ds
+a_nom = min(max(a_nom, a_min), a_max);
+Sf = 0;                                              % rear-wheel drive
+U_nom = zeros(3,N);                                  % [delta; Sf; Sr]
+U_nom(1,:) = min(max(atan(L*kappa), -delta_max), delta_max);
+U_nom(2,:) = Sf;
+U_nom(3,:) = m*a_nom/(2*Cxr);
 
 %% Nominal states
 [x_desired, y_desired] = deal(WP(1,:), WP(2,:));
 psi_desired = unwrap(headings);
-vx_desired = velocities;
+vx_desired = v_nom;                        % feasible nominal speed
 vy_desired = zeros(1,N); % assuming nominal lateral velocity is zero
-omega_desired = gradient(psi_desired, Ts);
+omega_desired = vx_desired .* kappa;       % nominal yaw rate = v * curvature
 X_nom = [x_desired; y_desired; psi_desired; vx_desired; vy_desired; omega_desired];
 
 %% Initial state
 X_mpc = zeros(6, N);
-X_mpc(:,1) = [WP(:,1); 0; 0; 0; 0];
+X_mpc(:,1) = [WP(:,1); psi_desired(1); vx_desired(1); 0; 0];   % start on the path at the nominal speed
 
 %% MPC parameters
 N_p = 15;        % Prediction horizon
@@ -103,8 +124,8 @@ for k = 1:N-1
 
     alpha44 = (1/m) * (-2 * Cyf * sin(delta) * (v_y + Lf * omega) / v_x^2 - 2 * CxA * v_x);
     alpha45 = (1/m) * (m * omega + 2 * Cyf * sin(delta) / v_x);
-    alpha46 = (1/m) * (m * v_y - 2 * Cyf * sin(delta) * Lf / v_x);
-    beta41 = (1/m) * (-2 * Cxf * Sf * sin(delta) - 2 * Cyf * (sin(delta) + delta * cos(delta)));
+    alpha46 = (1/m) * (m * v_y + 2 * Cyf * sin(delta) * Lf / v_x);
+    beta41 = (1/m) * (-2 * Cxf * Sf * sin(delta) - 2 * Cyf * (sin(delta) + (delta - (v_y + Lf * omega) / v_x) * cos(delta)));
     beta42 = (1/m) * (2 * Cxf * cos(delta));
     beta43 = (1/m) * (2 * Cxr);
 
@@ -150,23 +171,30 @@ for k = 1:N-1
         mpcobj.Weights.ManipulatedVariablesRate = [3.0, 0, 1e-3];            % heavier steer rate = smoother lateral
 
 
-        % Constraints
-        delta_max = deg2rad(30);
-        mpcobj.ManipulatedVariables(1).Min = -delta_max;
-        mpcobj.ManipulatedVariables(1).Max = delta_max;
-        mpcobj.ManipulatedVariables(2).Min = 0; % Constant
+        % Constraints. The MPC optimizes the input deviation u_tilde = u - u_nom,
+        % so the widest possible deviation range is declared here and the exact
+        % bounds u_min - u_nom(i_k) <= u_tilde <= u_max - u_nom(i_k) are passed
+        % at run time through mpcmoveopt.
+        mpcobj.ManipulatedVariables(1).Min = -2*delta_max;
+        mpcobj.ManipulatedVariables(1).Max =  2*delta_max;
+        mpcobj.ManipulatedVariables(2).Min = 0; % front slip fixed at zero
         mpcobj.ManipulatedVariables(2).Max = 0;
-        mpcobj.ManipulatedVariables(3).Min = Sr_min;
-        mpcobj.ManipulatedVariables(3).Max = Sr_max;
+        mpcobj.ManipulatedVariables(3).Min = Sr_min - Sr_max;
+        mpcobj.ManipulatedVariables(3).Max = Sr_max - Sr_min;
+        mpcopt = mpcmoveopt;
     end
 
     mpcobj.Model.Plant = ss(Ad, Bd, eye(6), zeros(6,3), Ts);
 
     %%%%%%%%%%%%%% Compute the control input using MPC %%%%%%%%%%%%%%%%%%%
-    y = X_mpc(:,k) - X_nom(:, next_index_mpc(k)); % current state
-    %y(3) = wrapToPi(y(3));
-    r = zeros(size(y));     % reference output
-    [U_mpc(:,k), info] = mpcmove(mpcobj, mpcstate_obj, y, r);  
+    u_nom_k = U_nom(:, next_index_mpc(k));              % nominal input at the nearest waypoint
+    y = X_mpc(:,k) - X_nom(:, next_index_mpc(k));       % state deviation x_tilde
+    y(3) = wrapToPi(y(3));
+    r = zeros(size(y));                                 % regulate the deviation to zero
+    mpcopt.MVMin = ([-delta_max; 0; Sr_min] - u_nom_k).';   % bounds on u_tilde
+    mpcopt.MVMax = ([ delta_max; 0; Sr_max] - u_nom_k).';
+    [u_tilde, info] = mpcmove(mpcobj, mpcstate_obj, y, r, [], mpcopt);
+    U_mpc(:,k) = u_nom_k + u_tilde;                     % applied input u = u_nom + u_tilde
 
 
     % MPC Dynamic bicycle model
@@ -191,6 +219,20 @@ for k = 1:N-1
 
 end
 
+%% Performance summary
+t = Tspan(1:k);
+t_sat = Ts*sum(U_mpc(3,1:k) >= Sr_max - 1e-12 | U_mpc(3,1:k) <= Sr_min + 1e-12);
+fprintf('\n%s\n', 'Example 7.3: MPC (state-error), dynamic bicycle');
+fprintf('lap time            : %.2f s\n', t(end));
+fprintf('RMS CTE             : %.3f m\n', rms(e_mpc(1:k)));
+fprintf('max |CTE|           : %.3f m\n', max(abs(e_mpc(1:k))));
+fprintf('RMS heading error   : %.3f deg\n', rms(rad2deg(theta_e_mpc(1:k))));
+fprintf('max |delta|         : %.2f deg\n', max(abs(rad2deg(U_mpc(1,1:k)))));
+fprintf('time at Sr limit    : %.2f s\n', t_sat);
+fprintf('RMS speed error     : %.3f m/s\n', rms(X_mpc(4,1:k) - X_nom(4,next_index_mpc(1:k))));
+fprintf('speed range         : [%.1f, %.1f] m/s\n', min(X_mpc(4,1:k)), max(X_mpc(4,1:k)));
+fprintf('vy range            : [%.2f, %.2f] m/s\n', min(X_mpc(5,1:k)), max(X_mpc(5,1:k)));
+
 %% Set Global defaults--affects all figures
 set(groot,'defaultFigureColor','w', ...
           'defaultAxesFontName','Helvetica', ...
@@ -200,65 +242,73 @@ set(groot,'defaultFigureColor','w', ...
           'defaultLineLineWidth',3, ...
           'defaultLegendFontSize',14, ...
           'defaultLegendFontWeight','bold');
+idx_k = next_index_mpc(1:k);
 
-%% Plot Trajectory
+%% Figure 1: trajectory
 figure;
 plot(reference(1,:), reference(2,:), 'b', 'LineWidth', 2); hold on;
 plot(X_mpc(1,1:k), X_mpc(2,1:k), 'r--', 'LineWidth', 2);
-xlabel('X Position (m)');
-ylabel('Y Position (m)');
-legend('Reference Trajectory', 'mpc Trajectory');
-grid on;
+xlabel('X Position (m)'); ylabel('Y Position (m)');
+legend('Reference Trajectory', 'MPC Trajectory');
+grid on; box on;
 
-
-%% Plot States
-figure;  hold on;
-subplot(2,1,1);  hold on; box on;
-plot(Tspan(1:k), rad2deg(X_nom(3,next_index_mpc(1:k))));
-plot(Tspan(1:k), rad2deg(X_mpc(3,1:k)),'r--');
+%% Figure 2: heading and longitudinal velocity
+figure;
+subplot(2,1,1); hold on; box on;
+plot(t, rad2deg(X_nom(3,idx_k)));
+plot(t, rad2deg(X_mpc(3,1:k)),'r--');
 xlabel('Time (s)'); ylabel('Heading Angle (deg)');
-legend('Nominal','mpc'); grid on; axis("tight");
+legend('Nominal','MPC','Location','best'); grid on; axis("tight");
 subplot(2,1,2); hold on; box on;
-plot(Tspan(1:k), X_nom(4,next_index_mpc(1:k)));
-plot(Tspan(1:k), X_mpc(4,1:k),'r--');
+plot(t, velocities(idx_k), 'k:');
+plot(t, X_nom(4,idx_k), 'Color', [0 0.4470 0.7410]);   % nominal in blue, as in the other plots
+plot(t, X_mpc(4,1:k),'r--');
 xlabel('Time (s)'); ylabel('Longitudinal Velocity (m/s)');
-legend('Nominal','mpc'); grid on; axis("tight");
+legend('Speed limit','Nominal','MPC','Location','best'); grid on; axis("tight");
 
-figure;  hold on;
-subplot(2,1,1);  hold on; box on;
-plot(Tspan(1:k), X_nom(5,next_index_mpc(1:k)));
-plot(Tspan(1:k), X_mpc(5,1:k),'r--');
+%% Figure 3: lateral velocity and yaw rate
+figure;
+subplot(2,1,1); hold on; box on;
+plot(t, X_nom(5,idx_k));
+plot(t, X_mpc(5,1:k),'r--');
 xlabel('Time (s)'); ylabel('Lateral Velocity (m/s)');
-legend('Nominal','mpc'); grid on; axis("tight");
+legend('Nominal','MPC','Location','best'); grid on; axis("tight");
 subplot(2,1,2); hold on; box on;
-plot(Tspan(1:k), X_nom(6,next_index_mpc(1:k)));
-plot(Tspan(1:k), X_mpc(6,1:k),'r--');
-xlabel('Time (s)'); ylabel('Omega (rad/s^2)');
-legend('Nominal','mpc'); grid on; axis("tight");
+plot(t, X_nom(6,idx_k));
+plot(t, X_mpc(6,1:k),'r--');
+xlabel('Time (s)'); ylabel('Yaw Rate (rad/s)');
+legend('Nominal','MPC','Location','best'); grid on; axis("tight");
 
+%% Figure 4: control inputs (steering in deg, slip ratios dimensionless)
+figure;
+subplot(3,1,1); hold on; box on;
+plot(t, rad2deg(U_nom(1,idx_k)));
+plot(t, rad2deg(U_mpc(1,1:k)),'r--');
+ylabel('Steering Angle (deg)');
+legend('Nominal','MPC','Location','best'); grid on; axis("tight");
+subplot(3,1,2); hold on; box on;
+plot(t, U_nom(2,idx_k));
+plot(t, U_mpc(2,1:k),'r--');
+ylabel('S_f'); grid on; axis("tight");
+subplot(3,1,3); hold on; box on;
+plot(t, U_nom(3,idx_k));
+plot(t, U_mpc(3,1:k),'r--');
+xlabel('Time (s)'); ylabel('S_r'); grid on; axis("tight");
 
-%% Plot Control Inputs
-figure; hold on;
-subplot 311; 
-hold on; plot(Tspan(1:k), rad2deg(U_mpc(1,1:k)));
-xlabel('Time (s)'); ylabel('Steering (deg)');
-grid on; box on; axis("tight");
-subplot 312; 
-hold on; plot(Tspan(1:k), rad2deg(U_mpc(2,1:k)));
-xlabel('Time (s)'); ylabel('Sf');
-grid on; box on; axis("tight");
-subplot 313; 
-hold on; plot(Tspan(1:k), U_mpc(3,1:k));
-xlabel('Time (s)'); ylabel('Sr');
-grid on; box on; axis("tight");
-
-%% Plot Errors
-figure; hold on;
-subplot 211;
-plot(Tspan(1:k), e_mpc(1:k));
+%% Figure 5: geometric errors
+figure;
+subplot(2,1,1);
+plot(t, e_mpc(1:k));
 xlabel('Time (s)'); ylabel('CTE (m)');
-grid on;  box on; axis("tight");
-subplot 212; 
-plot(Tspan(1:k), rad2deg(theta_e_mpc(1:k)));
+grid on; box on; axis("tight");
+subplot(2,1,2);
+plot(t, rad2deg(theta_e_mpc(1:k)));
 xlabel('Time (s)'); ylabel('Heading Error (deg)');
-grid on;  box on; axis("tight");
+grid on; box on; axis("tight");
+
+%% Save the five figures used in the book (figures/CH07)
+figdir = fullfile(fileparts(fileparts(fileparts(mfilename('fullpath')))), 'figures', 'CH07');
+names  = {'FigEx6_3_path','FigEx6_3_states1','FigEx6_3_states2','FigEx6_3_control_input','FigEx6_3_errors'};
+for i = 1:5
+    exportgraphics(figure(i), fullfile(figdir, [names{i} '.jpeg']), 'Resolution', 300);
+end

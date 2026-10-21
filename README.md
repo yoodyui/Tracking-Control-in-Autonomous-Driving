@@ -61,6 +61,7 @@ setup_paths
 ### Chapter 7
 
 - `Ex7_1_LQR_kinematic.m`
+- `Ex7_1_LQR_kinematic_weights.m` (the three-weight comparison in Example 7.1)
 - `Ex7_2_LQR_dynamics.m`
 - `Ex7_3_MPC_dynamicsStateErr.m`
 - `Ex7_4_MPC_dynamicsCTE.m`

@@ -25,7 +25,7 @@ KvP = 0.8;  KvI = 0.2;  KvD = 0.05;            % tune as needed
 a_min = -3.0;   % [m/s^2] decel limit
 a_max =  2.0;   % [m/s^2] accel limit
 
-%% ILC update (lateral FF only): uL_{j+1}(k) = uL_j(k) + L_ilc * e_j(k)
+%% ILC update (lateral FF only): uL_j(k) = uL_{j-1}(k) + L_ilc * e_{j-1}(k)
 L_ilc = 0.01;
 
 %% Storage across iterations

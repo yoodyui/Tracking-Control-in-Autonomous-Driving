@@ -12,8 +12,8 @@ function dX = linearized_bicycle_dynamics(~, X, U, m, Iz, Lf, Lr, CxA, Cxf, Cxr,
    % Longitudinal Velocity Equations
     alpha44 = (1/m) * (-2 * Cyf * sin(delta0) * (vy0 + Lf * omega0) / vx0^2 - 2 * CxA * vx0);
     alpha45 = (1/m) * (m * omega0 + 2 * Cyf * sin(delta0) / vx0);
-    alpha46 = (1/m) * (m * vy0 - 2 * Cyf * sin(delta0) * Lf / vx0);
-    beta41 = (1/m) * (-2 * Cxf * Sf0 * sin(delta0) - 2 * Cyf * (sin(delta0) + delta0 * cos(delta0)));
+    alpha46 = (1/m) * (m * vy0 + 2 * Cyf * sin(delta0) * Lf / vx0);
+    beta41 = (1/m) * (-2 * Cxf * Sf0 * sin(delta0) - 2 * Cyf * (sin(delta0) + (delta0 - (vy0 + Lf * omega0) / vx0) * cos(delta0)));
     beta42 = (1/m) * (2 * Cxf * cos(delta0));
     beta43 = (1/m) * (2 * Cxr);
 

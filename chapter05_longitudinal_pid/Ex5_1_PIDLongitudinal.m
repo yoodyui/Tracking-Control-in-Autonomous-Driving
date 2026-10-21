@@ -75,25 +75,21 @@ for k = 1:N
     end
 
     % ------------------ PID law (exactly as in the chapter) ------------------
-    % Pre-check unsaturated command with current integral term
-    a_unsat_pre = KvP*ev(k) + KvI*Iev + KvD*dev + Kff*dvref(k);
-
-    % % Conditional anti-windup gate:
-    % % If command would saturate high and error is positive -> hold integral
-    % % If command would saturate low  and error is negative -> hold integral
-    % hold_int = (a_unsat_pre > a_max && ev(k) > 0) || ...
-    %            (a_unsat_pre < a_min && ev(k) < 0);
-    % 
-    % if ~hold_int
-        Iev = Iev + ev(k)*Ts;  % update integral sum
-    % end
-
-    % Final unsaturated command with possibly updated integral
+    % Unsaturated command with the current integrator state I_k, eq. (pid-long)
     a_unsat = KvP*ev(k) + KvI*Iev + KvD*dev + Kff*dvref(k);
 
-    % Saturation
+    % % Saturation, eq. (sat)
     a_k = min(max(a_unsat, a_min), a_max);
     a_cmd(k) = a_k;
+
+    % Conditional anti-windup, eqs. (aw-update)-(aw-cond):
+    % hold the integrator when the command is saturated and the error
+    % would drive it further into saturation; otherwise I_{k+1} = I_k + Ts*e_{v,k}
+    hold_int = (a_unsat >= a_max && ev(k) >= 0) || ...
+               (a_unsat <= a_min && ev(k) <= 0);
+    if ~hold_int
+        Iev = Iev + ev(k)*Ts;
+    end
     % ------------------------------------------------------------------------
 
     % ------------------ Kinematic update (delta_k = 0) ----------------------

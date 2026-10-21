@@ -24,19 +24,21 @@ X_nom = reference; % Directly assign nominal states from the reference
 X_lqr(:,1) = [WP(:,1); 0; 0]; % [x; y; yaw; velocity]
 X_tilde = zeros(4,N);
 
-%% Nominal inputs (compute from reference)
-U_nom = zeros(2,N); %[acceleration;steering angle]
-U_nom(1,1:N-1) = diff(reference(4,:))/Ts; % acceleration
-U_nom(2,1:N-1) = diff(reference(3,:))./Ts .* (L ./ reference(4,1:end-1)); % steering angle
-U_nom(1,N) = U_nom(1,N-1);
-U_nom(2,N) = U_nom(2,N-1);
+%% Actuator limits
+a_min = -3; a_max = 2;        % acceleration bounds [m/s^2]
+delta_max = deg2rad(30);      % steering bound [rad]
 
-%% Find the nominal path
-[t_k, X_k] = ode45(@(t, X) kinematic_bicycle_model_2inputs(t, X, ...
-    [interp1(Tspan, U_nom(1,:), t, 'previous', 'extrap');...
-    interp1(Tspan, U_nom(2,:), t, 'previous', 'extrap')],...
-    L), Tspan, X_lqr(:,1));
-X_k = X_k';
+%% Nominal inputs from the reference (path derivatives)
+% The waypoints are spaced by distance, not by time, so the reference is
+% differentiated along the arc length s:  d(.)/dt = v * d(.)/ds
+s_ref   = [0, cumsum(vecnorm(diff(WP, 1, 2)))];          % arc length [m]
+kappa   = gradient(reference(3,:), s_ref);               % curvature d(psi)/ds
+dv_ds   = gradient(reference(4,:), s_ref);               % d(v)/ds
+U_nom = zeros(2,N); %[acceleration;steering angle]
+U_nom(1,:) = reference(4,:) .* dv_ds;                    % a_nom = v dv/ds
+U_nom(2,:) = atan(L * kappa);                            % delta_nom = atan(L*kappa)
+U_nom(1,:) = min(max(U_nom(1,:), a_min), a_max);         % keep the nominal feasible
+U_nom(2,:) = min(max(U_nom(2,:), -delta_max), delta_max);
 
 %% LQR Weight Matrices
 %Q = diag([1, 1, 100, 10e-9]);
@@ -92,9 +94,9 @@ for k = 1:N-1
     %% LQR input clearly computed
     U_lqr(:, k) = U_nom(:, next_index_lqr(k)) - K * X_tilde(:, k);
 
-    %% Apply saturation limits explicitly
-    %U_lqr(1,k) = min(max(U_lqr(1,k), -3), 3); % acceleration limits
-    %U_lqr(:,k) = min(max(U_lqr(:,k), deg2rad(-30)), deg2rad(30)); % steering limits
+    %% Actuator limits (same bounds as in Chapter 6)
+    U_lqr(1,k) = min(max(U_lqr(1,k), a_min), a_max);            % acceleration [m/s^2]
+    U_lqr(2,k) = min(max(U_lqr(2,k), -delta_max), delta_max);   % steering [rad]
 
     %% Actual vehicle state update
     X_lqr(1,k+1) = X_lqr(1,k) + Ts * X_lqr(4,k) * cos(X_lqr(3,k));
@@ -130,7 +132,6 @@ set(groot,'defaultFigureColor','w', ...
 %% Plot Results: Trajectory Comparison
 figure;
 plot(reference(1,:), reference(2,:), 'b', 'LineWidth', 2); hold on;
-%plot(X_k(1,:), X_k(2,:), 'm:', 'LineWidth', 2);
 plot(X_lqr(1,:), X_lqr(2,:), 'r-.', 'LineWidth', 2);
 xlabel('X Position (m)');
 ylabel('Y Position (m)');
@@ -141,8 +142,8 @@ grid on; box on;
 %% Plot Control Inputs
 figure; hold on;
 subplot 211; hold on;
-plot(Tspan(1:k), rad2deg(U_nom(1,next_index_lqr(1:k))));
-plot(Tspan(1:k), rad2deg(U_lqr(1,1:k)),'r--');
+plot(Tspan(1:k), U_nom(1,next_index_lqr(1:k)));
+plot(Tspan(1:k), U_lqr(1,1:k),'r--');
 xlabel('Time (s)'); ylabel('Acceleration (m/s^2)');
 legend('Nominal','LQR'); grid on;box on; axis("tight");
 
@@ -177,3 +178,10 @@ subplot 212;
 plot(Tspan(1:k), rad2deg(theta_e_lqr(1:k)));
 xlabel('Time (s)'); ylabel('Heading Error (deg)');
 grid on;  box on; axis("tight");
+
+%% Save the four figures used in the book (figures/CH07)
+figdir = fullfile(fileparts(fileparts(fileparts(mfilename('fullpath')))), 'figures', 'CH07');
+names  = {'FigEx6_1_path','FigEx6_1_control_input','FigEx6_1_states','FigEx6_1_errors'};
+for i = 1:4
+    exportgraphics(figure(i), fullfile(figdir, [names{i} '.jpeg']), 'Resolution', 300);
+end

@@ -38,8 +38,11 @@ theta_e = zeros(1,N);
 %% Simulation loop
 for k = 1:N
 
-    % Nearest waypoint (for references & CTE)
-    [next(:,k), pass(:,k), next_index(k), pass_index(k)] = nextWP(WP, [x(1,k); x(2,k)]);
+    % Front-axle position: reference point of the Stanley law
+    pf = [x(1,k) + L*cos(x(3,k)); x(2,k) + L*sin(x(3,k))];
+
+    % Nearest waypoint to the front axle (for references & CTE)
+    [next(:,k), pass(:,k), next_index(k), pass_index(k)] = nextWP(WP, pf);
 
     % Desired states from nearest waypoint
     x_desired(1,k) = reference(1, next_index(k));    % x_ref
@@ -48,7 +51,7 @@ for k = 1:N
     x_desired(4,k) = reference(4, next_index(k));    % v_ref
 
     % Errors for lateral control
-    e_cte(k)   = cte(next(:,k), pass(:,k), [x(1,k); x(2,k)]);
+    e_cte(k)   = cte(next(:,k), pass(:,k), pf);
     theta_e(k) = wrapToPi(x_desired(3,k) - x(3,k));
 
     %------------------------%

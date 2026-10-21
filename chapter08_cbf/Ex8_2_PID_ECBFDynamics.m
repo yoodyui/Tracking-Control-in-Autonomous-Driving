@@ -1,7 +1,17 @@
 % Example 8.2: PID vs PID+ECBF Safety Filter (Dynamic Bicycle Model)
-% Structure follows Ex6_4_PID_dynamics.m exactly.
+% Structure follows Ex6_4_PID_dynamics.m.
 % A parallel PID+ECBF branch is added alongside the pure PID branch.
 % Both share identical vehicle parameters, waypoints, and longitudinal control.
+%
+% The ECBF coefficients alpha and beta are obtained from the dynamic bicycle
+% model of Chapter 4 (dynamic_bicycle_model.m), with two tires per axle:
+%   e_ddot = v_t*vx*kappa
+%            - (1/m)*[ (2*Cxr*Sr - CxA*vx^2)*sin(theta_e)
+%                      + 2*Cxf*Sf*sin(theta_e + delta)
+%                      + 2*Cyf*(delta - phi_f)*cos(theta_e + delta)
+%                      - 2*Cyr*phi_r*cos(theta_e) ],
+% where v_t = vx*cos(theta_e) - vy*sin(theta_e),
+%       phi_f = (vy + Lf*omega)/vx,  phi_r = (vy - Lr*omega)/vx.
 
 clc; clear; close all;
 run(fullfile(fileparts(fileparts(mfilename('fullpath'))), 'setup_paths.m'));
@@ -20,6 +30,11 @@ Ts      = 0.05;
 T_final = 200;
 N       = floor(T_final / Ts);
 Tspan   = (0:N-1) * Ts;
+
+% Integration of the vehicle model over one sampling period (input held):
+%   true  -> fourth-order Runge-Kutta step
+%   false -> forward Euler step
+use_rk4 = true;
 
 %% ─── REFERENCE TRAJECTORY (identical to Ex6_4) ─────────────────────────
 [WP, velocities, headings] = waypoints_with_velocity_and_heading(N);
@@ -69,6 +84,7 @@ beta_log      = zeros(1, N);
 v_ref_pid_log = zeros(1, N);
 v_ref_cbf_log = zeros(1, N);
 ecbf_active_log = false(1, N);
+n_infeasible  = 0;     % number of steps at which the ECBF-QP has no solution
 
 k_end = N - 1;
 
@@ -108,9 +124,8 @@ for k = 1:N-1
     Sr_p = min(max(Sr_p, -Sr_max), Sr_max);
     U_pid(:,k) = [delta_p; 0; Sr_p];
 
-    dX_p = dynamic_bicycle_model(0, X_pid(:,k), U_pid(:,k), ...
+    X_pid(:,k+1) = plant_step(X_pid(:,k), U_pid(:,k), Ts, use_rk4, ...
                m, Iz, Lf, Lr, CxA, Cxf, Cxr, Cyf, Cyr);
-    X_pid(:,k+1) = X_pid(:,k) + Ts*dX_p;
 
     % ══════════════════════════════════════════════════════════════════════
     %  PID + ECBF BRANCH
@@ -159,31 +174,25 @@ for k = 1:N-1
     %   e_dot = -vx*sin(theta_e) - vy*cos(theta_e).
     e_dot = -vx_c*sin(theta_dyn) - vy_c*cos(theta_dyn);
 
-    % Explicit alpha and beta from the chapter's affine approximation:
-    %   e_ddot ~= alpha*Delta_delta + beta,
-    % where Delta_delta = delta - delta_nom.
-    %
-    % Text-to-code mapping:
-    %   C_f -> Cyf,  C_r -> Cyr,  a -> accel_c,
-    %   F_r -> F_res = CxA*vx^2.
-    F_res = CxA * vx_c^2;
-    alpha = -( ...
-        (Cyf/m) * (-delta_nom*sin(theta_dyn + delta_nom) ...
-                   + cos(theta_dyn + delta_nom)) ...
-        + 0.5*accel_c*cos(delta_nom)*cos(theta_dyn) ...
-        + (Cyf/m) * ((vy_c + Lf*om_c)/vx_safe) ...
-                  * sin(theta_dyn + delta_nom) );
+    % alpha and beta of the affine approximation
+    %   e_ddot ~= alpha*Delta_delta + beta,   Delta_delta = delta - delta_nom,
+    % obtained from the dynamic bicycle model (two tires per axle).
+    phi_f  = (vy_c + Lf*om_c)/vx_safe;       % front slip term
+    phi_r  = (vy_c - Lr*om_c)/vx_safe;       % rear slip term
+    s_e    = sin(theta_dyn);
+    c_e    = cos(theta_dyn);
+    v_t    = vx_c*c_e - vy_c*s_e;            % speed along the path tangent
+    F_long = 2*Cxr*Sr_c - CxA*vx_c^2;        % rear traction minus drag (N)
 
-    beta = -( ...
-        (Cyf/m) * delta_nom*cos(theta_dyn + delta_nom) ...
-        + accel_c*(sin(theta_dyn) ...
-                   + 0.5*sin(delta_nom)*cos(theta_dyn)) ...
-        + (vx_c*cos(theta_dyn) - vy_c*sin(theta_dyn)) ...
-            * (-vx_c*kappa_c) ...
-        + (1/m) * ( -Cyf*((vy_c + Lf*om_c)/vx_safe) ...
-                    * cos(theta_dyn + delta_nom) ) ...
-        + (1/m) * ( -F_res*sin(theta_dyn) ...
-                    - Cyr*((vy_c - Lr*om_c)/vx_safe)*cos(theta_dyn) ) );
+    th_d   = theta_dyn + delta_nom;          % theta_e + delta_nom
+
+    alpha = -(2/m) * ( (Cyf + Cxf*Sf_c)*cos(th_d) ...
+                       - Cyf*(delta_nom - phi_f)*sin(th_d) );
+
+    beta  = v_t*vx_c*kappa_c - (1/m) * ( F_long*s_e ...
+              + 2*Cxf*Sf_c*sin(th_d) ...
+              + 2*Cyf*(delta_nom - phi_f)*cos(th_d) ...
+              - 2*Cyr*phi_r*c_e );
 
     alpha_log(k) = alpha;
     beta_log(k)  = beta;
@@ -219,7 +228,8 @@ for k = 1:N-1
     if flag == 1
         delta_c = delta_nom + d_delta_safe;
     else
-        delta_c = delta_nom;
+        delta_c = delta_nom;              % fallback: nominal command
+        n_infeasible = n_infeasible + 1;
     end
 
     d_delta_log(k) = delta_c - delta_nom;
@@ -227,9 +237,8 @@ for k = 1:N-1
 
     U_cbf(:,k) = [delta_c; Sf_c; Sr_c];
 
-    dX_c = dynamic_bicycle_model(0, X_cbf(:,k), U_cbf(:,k), ...
+    X_cbf(:,k+1) = plant_step(X_cbf(:,k), U_cbf(:,k), Ts, use_rk4, ...
                m, Iz, Lf, Lr, CxA, Cxf, Cxr, Cyf, Cyr);
-    X_cbf(:,k+1) = X_cbf(:,k) + Ts*dX_c;
 
     % ── Termination (identical criterion to Ex6_4) ────────────────────────
     distanceToStart(k) = dis([next_c(1,1); next_c(2,1)], [x_c; y_c]);
@@ -257,6 +266,20 @@ fprintf('Lateral RMSE  — PID: %.4f m   |   PID+ECBF: %.4f m   |   Change: %.1f
         rmse_pid, rmse_ecbf, rmse_change_pct);
 fprintf('Max |e|       — PID: %.4f m   |   PID+ECBF: %.4f m   |   Change: %.1f%%\n', ...
         max_abs_pid, max_abs_ecbf, max_abs_change_pct);
+fprintf('Integration   — %s,  Ts = %.3f s,  lap time = %.2f s\n', ...
+        ternary_str(use_rk4, 'RK4', 'forward Euler'), Ts, k_end*Ts);
+fprintf('min h(e)      — PID+ECBF: %.4f\n', min(h_log(1:k_end)));
+fprintf('ECBF active   — %.1f%% of the steps,  infeasible steps: %d\n', ...
+        100*mean(ecbf_active_log(1:k_end)), n_infeasible);
+fprintf('max |Delta_delta| = %.2f deg,  max |delta| (PID+ECBF) = %.2f deg,  max |delta| (PID) = %.2f deg\n', ...
+        rad2deg(max(abs(d_delta_log(1:k_end)))), ...
+        rad2deg(max(abs(U_cbf(1,1:k_end)))), rad2deg(max(abs(U_pid(1,1:k_end)))));
+fprintf('Speed (PID+ECBF) — max: %.2f m/s,  desired on straights/arcs: %.1f / %.1f m/s\n', ...
+        max(X_cbf(4,1:k_end)), max(velocities), min(velocities));
+act_idx = find(ecbf_active_log(1:k_end));
+if ~isempty(act_idx)
+    fprintf('First ECBF activation at t = %.2f s\n', Tspan(act_idx(1)));
+end
 
 %% ─── SAFETY CORRIDOR ────────────────────────────────────────────────────
 % Left-normal unit vector at each waypoint
@@ -268,13 +291,23 @@ ecbf_color = 'green';      % dark orange for textbook visibility
 active_color = [1.00 0.86 0.35];    % light amber activation highlight
 
 
+%% ─── PLOT STYLE (same as Example 8.1) ───────────────────────────────────
+set(groot,'defaultFigureColor','w', ...
+          'defaultAxesFontName','Helvetica', ...
+          'defaultAxesFontSize',16, ...
+          'defaultAxesFontWeight','bold', ...
+          'defaultAxesLineWidth',1.5, ...
+          'defaultLineLineWidth',3, ...
+          'defaultLegendFontSize',14, ...
+          'defaultLegendFontWeight','bold');
+
 %% ─── FIGURE 1: TRAJECTORY WITH CORRIDORS ────────────────────────────────
-figure;
+fig_path = figure;
 main_ax = gca;
 hold(main_ax, 'on'); grid(main_ax, 'on'); axis(main_ax, 'equal'); box(main_ax, 'on');
 
 fill([ux, fliplr(lx)], [uy, fliplr(ly)], [0.85 0.92 1], ...
-     'EdgeColor','none','FaceAlpha',0.4);
+     'EdgeColor','none','FaceAlpha',0.4, 'DisplayName','Safety area');
 plot(WP(1,:), WP(2,:), 'b-',  'LineWidth',2,   'DisplayName','Reference');
 plot(ux, uy,            'k--', 'LineWidth',1.2, 'DisplayName', ...
      sprintf('Safety bound'));
@@ -283,43 +316,63 @@ plot(X_pid(1,1:k_end), X_pid(2,1:k_end), 'r--', 'LineWidth',2, ...
      'DisplayName','PID');
 plot(X_cbf(1,1:k_end), X_cbf(2,1:k_end), 'g-.', 'Color', ecbf_color, ...
      'LineWidth',2.4, ...
-     'DisplayName','PID + ECBF');
+     'DisplayName','PID+ECBF');
 
 xlabel('X Position (m)');  ylabel('Y Position (m)');
 title('Trajectory — PID vs PID+ECBF');
-legend(main_ax);
+% Legend below the axes, so that it does not cover the track.
+legend(main_ax, 'Location','southoutside', 'Orientation','horizontal');
 
-% Inset: zoom into the lower-right track segment, where small lateral
-% deviations are difficult to distinguish at the full trajectory scale.
-zoom_xlim = [120, 140];
-zoom_ylim = [-1, 7];
+% Inset: entry to the second arc (upper left), where the cross-track error
+% of the PID controller is largest. The window is 13 m x 7 m, so the
+% 1.6 m wide corridor is clearly resolved.
+zoom_xlim = [-4, 9];
+zoom_ylim = [101.3, 108.3];
 
 rectangle(main_ax, 'Position', ...
     [zoom_xlim(1), zoom_ylim(1), diff(zoom_xlim), diff(zoom_ylim)], ...
     'EdgeColor', 'k', 'LineWidth', 1.0, 'LineStyle', '-', ...
     'HandleVisibility', 'off');
 
-inset_ax = axes('Parent', gcf, 'Units', 'normalized', ...
-    'Position', [0.3 0.3 0.5 0.5], 'Color', 'w');
+% The inset is placed inside the loop. Its rectangle is given in data units
+% of the main axes, with the same aspect ratio as the zoom window, and is
+% converted to figure units, so that it stays clear of the track for any
+% figure size and legend placement.
+inset_w    = 130;
+inset_rect = [8, 20, inset_w, inset_w*diff(zoom_ylim)/diff(zoom_xlim)];
+
+% Connect the zoom window to the inset.
+plot(main_ax, [zoom_xlim(1), inset_rect(1)], ...
+     [zoom_ylim(1), inset_rect(2) + inset_rect(4)], 'k:', ...
+     'LineWidth', 1.0, 'HandleVisibility', 'off');
+plot(main_ax, [zoom_xlim(2), inset_rect(1) + inset_rect(3)], ...
+     [zoom_ylim(1), inset_rect(2) + inset_rect(4)], 'k:', ...
+     'LineWidth', 1.0, 'HandleVisibility', 'off');
+
+[fx1, fy1] = dataToFigure(main_ax, inset_rect(1), inset_rect(2));
+[fx2, fy2] = dataToFigure(main_ax, inset_rect(1) + inset_rect(3), ...
+                                   inset_rect(2) + inset_rect(4));
+inset_ax = axes('Parent', fig_path, 'Units', 'normalized', ...
+    'Position', [fx1, fy1, fx2 - fx1, fy2 - fy1], 'Color', 'w');
 hold(inset_ax, 'on'); grid(inset_ax, 'on'); axis(inset_ax, 'equal');
 box(inset_ax, 'on');
 fill(inset_ax, [ux, fliplr(lx)], [uy, fliplr(ly)], [0.85 0.92 1], ...
      'EdgeColor','none','FaceAlpha',0.4);
-plot(inset_ax, WP(1,:), WP(2,:), 'b-', 'LineWidth',1.5);
-plot(inset_ax, ux, uy, 'k--', 'LineWidth',0.9);
-plot(inset_ax, lx, ly, 'k--', 'LineWidth',0.9);
+plot(inset_ax, WP(1,:), WP(2,:), 'b-', 'LineWidth',2);
+plot(inset_ax, ux, uy, 'k--', 'LineWidth',1.2);
+plot(inset_ax, lx, ly, 'k--', 'LineWidth',1.2);
 plot(inset_ax, X_pid(1,1:k_end), X_pid(2,1:k_end), 'r--', ...
-     'LineWidth',1.5);
+     'LineWidth',2);
 plot(inset_ax, X_cbf(1,1:k_end), X_cbf(2,1:k_end), '-.', ...
-     'Color', ecbf_color, 'LineWidth',1.8);
+     'Color', ecbf_color, 'LineWidth',2.4);
 xlim(inset_ax, zoom_xlim); ylim(inset_ax, zoom_ylim);
 %title(inset_ax, 'Zoomed view', 'FontSize', 8);
-set(inset_ax, 'FontSize', 8, 'LineWidth', 1.2);
+set(inset_ax, 'FontSize', 11, 'LineWidth', 1.2);
 uistack(inset_ax, 'top');
 axes(inset_ax);
 
 %% ─── FIGURE 2: CTE AND BARRIER FUNCTION ────────────────────────────────
-figure;
+fig_cte = figure;
 subplot(2,1,1); hold on; grid on; box on;
 plot(Tspan(1:k_end), e_pid_log(1:k_end), 'b', 'LineWidth',1.5, ...
      'DisplayName','PID');
@@ -330,8 +383,14 @@ yline( e_max, 'k--', 'LineWidth',1.2, 'HandleVisibility','off');
 yline(-e_max, 'k--', 'LineWidth',1.2, 'HandleVisibility','off');
 ylabel('CTE (m)');
 title('Cross-Track Error');
-legend('Location','best');
 shadeActivation(Tspan(1:k_end), ecbf_active_log(1:k_end), active_color);
+% Horizontal legend centered at (t, e) = (17.5 s, -0.4 m), which lies in the
+% free band between the error curves and the lower bound.
+lgd = legend('Orientation','horizontal');
+[cx, cy] = dataToFigure(gca, 17.5, -0.4);
+lgd.Units = 'normalized';
+lp = lgd.Position;
+lgd.Position = [cx - lp(3)/2, cy - lp(4)/2, lp(3), lp(4)];
 
 subplot(2,1,2); hold on; grid on; box on;
 plot(Tspan(1:k_end), h_log(1:k_end), 'b', ...
@@ -365,16 +424,64 @@ shadeActivation(Tspan(1:k_end), ecbf_active_log(1:k_end), active_color);
 % title('ECBF Steering Correction \Delta\delta^*  (non-zero = filter active)');
 
 % %% ─── FIGURE 4: VELOCITIES ───────────────────────
-figure; hold on;
-plot(Tspan(1:k_end), v_ref_pid_log(1:k_end), 'k-', 'LineWidth', 1.1, ...
-    'DisplayName', 'Desired (PID index)');
-plot(Tspan(1:k_end), X_pid(4,1:k_end), 'b', 'LineWidth', 1.2, ...
+fig_speed = figure; hold on;
+plot(Tspan(1:k_end), v_ref_pid_log(1:k_end), 'k:', 'LineWidth', 2.0, ...
+    'DisplayName', 'Desired');
+plot(Tspan(1:k_end), X_pid(4,1:k_end), 'b-', 'LineWidth', 1.5, ...
     'DisplayName', 'PID');
-plot(Tspan(1:k_end), X_cbf(4,1:k_end), 'r--', 'LineWidth', 1.2, ...
-    'DisplayName', 'ECBF');
+plot(Tspan(1:k_end), X_cbf(4,1:k_end), 'r--', 'LineWidth', 1.5, ...
+    'DisplayName', 'PID+ECBF');
 xlim('tight');
 xlabel('Time (s)'); ylabel('Longitudinal Velocity (m/s)');
-legend('Location','best'); grid on; box on;
+legend('Location','southeast'); grid on; box on;
+
+%% ─── SAVE THE THREE FIGURES USED IN THE BOOK (figures/CH08) ─────────────
+% Saved only for the Runge-Kutta run, which is the one reported in the book.
+if use_rk4
+    figdir = fullfile(fileparts(fileparts(fileparts(mfilename('fullpath')))), 'figures', 'CH08');
+    exportgraphics(fig_path,  fullfile(figdir, 'FigEx7_2_path.jpeg'),  'Resolution', 300);
+    exportgraphics(fig_cte,   fullfile(figdir, 'FigEx7_2_cte.jpeg'),   'Resolution', 300);
+    exportgraphics(fig_speed, fullfile(figdir, 'FigEx7_2_speed.jpeg'), 'Resolution', 300);
+end
+
+function X_next = plant_step(X, U, Ts, use_rk4, m, Iz, Lf, Lr, CxA, Cxf, Cxr, Cyf, Cyr)
+%PLANT_STEP Advance the dynamic bicycle model by one sampling period with
+%the input U held constant.
+    f = @(x) dynamic_bicycle_model(0, x, U, m, Iz, Lf, Lr, CxA, Cxf, Cxr, Cyf, Cyr);
+    if use_rk4
+        k1 = f(X);
+        k2 = f(X + 0.5*Ts*k1);
+        k3 = f(X + 0.5*Ts*k2);
+        k4 = f(X + Ts*k3);
+        X_next = X + (Ts/6)*(k1 + 2*k2 + 2*k3 + k4);
+    else
+        X_next = X + Ts*f(X);
+    end
+end
+
+function [fx, fy] = dataToFigure(ax, x, y)
+%DATATOFIGURE Normalized figure coordinates of the data point (x, y) of ax.
+%With "axis equal" the plot box is centered inside the axes position.
+    drawnow;
+    fig = ancestor(ax, 'figure');
+    u = ax.Units;   ax.Units  = 'pixels';  ap = ax.Position;   ax.Units  = u;
+    u = fig.Units;  fig.Units = 'pixels';  fp = fig.Position;  fig.Units = u;
+    xl = xlim(ax);  yl = ylim(ax);
+    sx = ap(3)/diff(xl);                 % pixels per data unit
+    sy = ap(4)/diff(yl);
+    if strcmp(ax.DataAspectRatioMode, 'manual')      % axis equal
+        s  = min(sx, sy);
+        ap(1) = ap(1) + (ap(3) - s*diff(xl))/2;
+        ap(2) = ap(2) + (ap(4) - s*diff(yl))/2;
+        sx = s;  sy = s;
+    end
+    fx = (ap(1) + sx*(x - xl(1)))/fp(3);
+    fy = (ap(2) + sy*(y - yl(1)))/fp(4);
+end
+
+function s = ternary_str(cond, a, b)
+    if cond, s = a; else, s = b; end
+end
 
 function angle = wrapToPiLocal(angle)
 %WRAPTOPILOCAL Normalize angle to [-pi, pi] without toolbox dependencies.

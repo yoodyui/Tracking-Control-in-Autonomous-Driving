@@ -25,7 +25,7 @@ KvP = 0.8;  KvI = 0.2;  KvD = 0.05;             % tune as needed
 a_min = -3.0;   % [m/s^2] decel limit
 a_max =  2.0;   % [m/s^2] accel limit
 
-%% ILC update (time-indexed lateral FF): uL_{j+1}(k) = leak*uL_j(k) + L_ilc * LPF{ e_j(k) }
+%% ILC update (time-indexed lateral FF): uL_j(k) = leak*uL_{j-1}(k) + L_ilc * LPF{ e_{j-1}(k) }
 L_ilc = 0.01;        % learning gain
 
 % Zero-phase LPF design (Butterworth). Cutoff in Hz relative to Ts

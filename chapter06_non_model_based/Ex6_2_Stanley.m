@@ -23,8 +23,11 @@ epsilon = 0.1; % Small constant to avoid division by zero
 
 % Simulation loop
 for k = 1:N
-    % Find the closest waypoints
-    [next(:, k), pass(:, k), next_index(k), pass_index(k)] = nextWP(WP, [x(1, k); x(2, k)]);
+    % Front-axle position: reference point of the Stanley law
+    pf = [x(1, k) + L*cos(x(3, k)); x(2, k) + L*sin(x(3, k))];
+
+    % Find the closest waypoints to the front axle
+    [next(:, k), pass(:, k), next_index(k), pass_index(k)] = nextWP(WP, pf);
     
     % Store desired states
     x_desired(1,k) = reference(1, next_index(k));  % Desired X position
@@ -36,7 +39,7 @@ for k = 1:N
     x(4,k) = x_desired(4,k);
 
     % Compute Cross-Track Error (CTE) and Heading Error
-    e(k) = cte(next(:, k), pass(:, k), [x(1, k); x(2, k)]);
+    e(k) = cte(next(:, k), pass(:, k), pf);
     theta_e(k) = mod(x_desired(3,k) - x(3, k) + pi, 2*pi) - pi;
 
     % Stanley Control Law

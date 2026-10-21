@@ -19,7 +19,7 @@ reference = [WP; unwrap(headings); velocities];
 %% Nominal PID (u_j(k))
 Kp = 0.1;  Ki = 0.0;  Kd = 0;  Kt = 1;
 
-%% ILC update: uL_{j+1}(k) = uL_j(k) + L_ilc * e_j(k)
+%% ILC update: uL_j(k) = uL_{j-1}(k) + L_ilc * e_{j-1}(k)
 L_ilc = 0.01;                           % learning gain
 
 %% Storage across iterations

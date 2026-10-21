@@ -27,7 +27,7 @@ KvP = 0.8;  KvI = 0.2;  KvD = 0.05;              % tune as needed
 a_min = -3.0;   % [m/s^2] decel limit
 a_max =  2.0;   % [m/s^2] accel limit
 
-%% Spatial ILC (lateral FF only): uL_s^{j+1}(i) = uL_s^j(i) + L_ilc * e_avg(i)
+%% Spatial ILC (lateral FF only): uL_s^{j}(i) = uL_s^{j-1}(i) + L_ilc * e_avg(i)
 L_ilc = 0.01;
 
 %% Storage across iterations

@@ -74,8 +74,8 @@ for k = 1:N-1
 
     alpha44 = (1/m) * (-2 * Cyf * sin(delta_nom) * (vy_nom + Lf * omega_nom) / vx_nom^2 - 2 * CxA * vx_nom);
     alpha45 = (1/m) * (m * omega_nom + 2 * Cyf * sin(delta_nom) / vx_nom);
-    alpha46 = (1/m) * (m * vy_nom - 2 * Cyf * sin(delta_nom) * Lf / vx_nom);
-    beta41 = (1/m) * (-2 * Cxf * Sf_nom * sin(delta_nom) - 2 * Cyf * (sin(delta_nom) + delta_nom * cos(delta_nom)));
+    alpha46 = (1/m) * (m * vy_nom + 2 * Cyf * sin(delta_nom) * Lf / vx_nom);
+    beta41 = (1/m) * (-2 * Cxf * Sf_nom * sin(delta_nom) - 2 * Cyf * (sin(delta_nom) + (delta_nom - (vy_nom + Lf * omega_nom) / vx_nom) * cos(delta_nom)));
     beta42 = (1/m) * (2 * Cxf * cos(delta_nom));
     beta43 = (1/m) * (2 * Cxr);
 
@@ -116,6 +116,14 @@ end
 
 
 %% Plot Perturbation Model Comparison
+% Larger text, similar to the old "Presentation/PowerPoint" style
+set(groot, 'defaultAxesFontSize',    14, ...
+    'defaultAxesFontWeight', 'bold', ...
+    'defaultTextFontSize',    14, ...
+    'defaultLegendFontSize',  12, ...
+    'defaultLineLineWidth',   1.5, ...
+    'defaultAxesLineWidth',   1.0);
+
 figure;
 subplot(3,1,1); hold on;
 plot(t_lin_c, X_lin_c(:,1), 'r-', 'LineWidth', 2);

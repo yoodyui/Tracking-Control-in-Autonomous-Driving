@@ -41,7 +41,7 @@ a_max =  2.0;    % Max acceleration (m/s^2)
 
 %% CBF parameters (lateral safety)
 e_max  = 0.4;    % Maximum allowable cross-track error (m)
-lambda = 1.0;    % CBF decay rate lambda > 0 (higher => more conservative)
+lambda = 1.0;    % CBF decay rate lambda > 0 (smaller => more conservative)
 
 %% Initial states — 0.35 m lateral offset to activate CBF at start
 x_pid = [WP(1,1); WP(2,1) + 0.35; 0; 0];   % [X; Y; psi; vx]
@@ -173,6 +173,17 @@ fprintf('Max |CTE|     — PID: %.4f m   |   PID+CBF: %.4f m\n', ...
         max(abs(e_cte_pid(1:k))), max(abs(e_cte_cbf(1:k))));
 fprintf('Speed  RMSE   — PID: %.4f m/s |   PID+CBF: %.4f m/s\n', ...
         sqrt(mean(ev_pid(1:k).^2)), sqrt(mean(ev_cbf(1:k).^2)));
+i5 = find(t > 5, 1);    % first sample after the initial transient
+fprintf('Max |CTE|, t > 5 s — PID: %.4f m   |   PID+CBF: %.4f m\n', ...
+        max(abs(e_cte_pid(i5:k))), max(abs(e_cte_cbf(i5:k))));
+d_delta = u_cbf(2,1:k) - delta_nom(1:k);
+act = abs(d_delta) > 1e-6;
+fprintf('min h(e) = %.4f,  CBF active %.1f%% of the steps,  first activation at t = %.2f s\n', ...
+        min(h(1:k)), 100*mean(act), t(find(act, 1)));
+fprintf('CBF correction — min: %.2f deg,  max: %.2f deg\n', ...
+        rad2deg(min(d_delta)), rad2deg(max(d_delta)));
+fprintf('Speed (PID+CBF) — at arc entry (t = 9.5 s): %.1f m/s,  max: %.1f m/s,  lap time: %.2f s\n', ...
+        x_cbf(4, round(9.5/Ts)+1), max(x_cbf(4,1:k)), k*Ts);
 
 %% Set Global defaults
 set(groot,'defaultFigureColor','w', ...
