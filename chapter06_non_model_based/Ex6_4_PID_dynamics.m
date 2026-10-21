@@ -28,6 +28,7 @@ Tspan = (0:N-1) * Ts;
 
 %% Reference trajectory generation
 [WP, velocities, headings] = waypoints_with_velocity_and_heading(N);
+velocities = min(velocities, 30); % Example-specific straight speed cap (m/s)
 reference = [WP; headings; velocities];
 
 %% Initialize states
