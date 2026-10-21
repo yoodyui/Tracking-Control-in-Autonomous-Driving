@@ -144,3 +144,51 @@ xlabel('Time (s)'); ylabel('Heading Error (deg)'); grid on;
 % xlabel('Time (s)'); ylabel('Sf'); grid on; box on;
 % subplot 313; plot(Tspan(1:k), rad2deg(U(3,1:k)));
 % xlabel('Time (s)'); ylabel('Sr'); grid on; box on;
+
+%% Figure styling for legibility at the printed book size
+navy = [0.05 0.25 0.70];
+red = [0.80 0.08 0.10];
+for figNo = 1:3
+    fig = figure(figNo);
+    set(fig, 'Color', 'w', 'Units', 'inches', 'Position', [1 1 8 5.5]);
+    if figNo > 1
+        set(fig, 'Position', [1 1 8 6.5]);
+    end
+    for ax = findall(fig, 'Type', 'axes')'
+        set(ax, 'FontName', 'Helvetica', 'FontSize', 15, ...
+            'LineWidth', 1.1, 'XColor', [0.12 0.12 0.12], ...
+            'YColor', [0.12 0.12 0.12], 'GridAlpha', 0.14);
+        set(ax.XLabel, 'FontSize', 17);
+        set(ax.YLabel, 'FontSize', 17);
+        for line = findall(ax, 'Type', 'line')'
+            set(line, 'LineWidth', 2.6);
+            if isequal(line.Color, [1 0 0])
+                set(line, 'Color', red);
+            else
+                set(line, 'Color', navy);
+            end
+        end
+        if figNo == 2 && ax.Position(2) < 0.5
+            ylim(ax, [0 35]);
+        elseif figNo == 3 && ax.Position(2) > 0.5
+            ylim(ax, [-1 9]);
+        elseif figNo == 3
+            ylim(ax, [-32 10]);
+        end
+    end
+    for lg = findall(fig, 'Type', 'legend')'
+        set(lg, 'FontName', 'Helvetica', 'FontSize', 14, ...
+            'LineWidth', 0.8, 'Color', 'w');
+    end
+end
+
+% Keep each legend clear of the data.
+pathLegend = findall(figure(1), 'Type', 'legend');
+set(pathLegend, 'Units', 'normalized', 'Position', [0.35 0.45 0.34 0.12]);
+for lg = findall(figure(2), 'Type', 'legend')'
+    if lg.Position(2) < 0.5
+        set(lg, 'Location', 'southeast');
+    else
+        set(lg, 'Location', 'northwest');
+    end
+end
