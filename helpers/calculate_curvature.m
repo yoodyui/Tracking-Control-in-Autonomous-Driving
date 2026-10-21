@@ -11,7 +11,7 @@ function curvature = calculate_curvature(p1, p2, p3)
     s = (a + b + c) / 2;
 
     % Area of the triangle using Heron's formula
-    A = sqrt(s * (s - a) * (s - b) * (s - c));
+    A = sqrt(max(s * (s - a) * (s - b) * (s - c), 0));
 
     if A == 0
         curvature = 0; % Points are collinear
