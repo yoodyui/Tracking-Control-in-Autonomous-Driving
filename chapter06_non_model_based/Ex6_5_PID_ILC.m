@@ -94,13 +94,17 @@ for j = 1:n_iter
     end
     
     %close all;
-    % Save iteration data
-    x_all{j} = x;
-    e_all{j} = e;
-    rmse_cte(j) = sqrt(mean(e.^2));   % RMSE for iteration j
+    % Record only samples executed on this lap. Keep uL on its fixed N grid.
+    K_final = k;
+    x_all{j} = x(:,1:K_final+1);
+    e_all{j} = e(1:K_final);
+    rmse_cte(j) = sqrt(mean(e(1:K_final).^2));
 
-    % ILC update for next iteration
-    uL = uL + L_ilc * e;
+    % Learn only from observed samples; unvisited time indices are unchanged.
+    dU = zeros(1,N);
+    dU(1:K_final) = L_ilc * e(1:K_final);
+    uL = uL + dU;
+
 end
 
 %% Plots: path tracking across iterations

@@ -6,6 +6,9 @@
 clc; clear; close all;
 run(fullfile(fileparts(fileparts(mfilename('fullpath'))), 'setup_paths.m'));
 
+%% Exercise 7.3 option (false reproduces the constrained worked example)
+remove_actuator_limits = false; % set true for the new end-of-chapter exercise
+
 %% Common set-up (identical to Ex7_1_LQR_kinematic.m)
 L = 2.8; Ts = 0.05; T_final = 200;
 N = floor(T_final/Ts); Tspan = (0:N-1)*Ts;
@@ -22,6 +25,12 @@ dv_ds = gradient(reference(4,:), s_ref);
 U_nom = zeros(2,N);
 U_nom(1,:) = min(max(reference(4,:).*dv_ds, lim.a_min), lim.a_max);
 U_nom(2,:) = min(max(atan(L*kappa), -lim.delta_max), lim.delta_max);
+
+% Retain the same nominal trajectory; change applied-command limits only.
+if remove_actuator_limits
+    lim.a_min = -Inf; lim.a_max = Inf;
+    lim.delta_max = Inf;
+end
 
 Q0 = diag([1, 1, 100, 10]);  R0 = diag([1, 1]);
 cases = { 'Baseline Q, R',  Q0,    R0;
@@ -50,6 +59,7 @@ set(groot,'defaultFigureColor','w','defaultAxesFontName','Helvetica', ...
     'defaultAxesLineWidth',1.5,'defaultLineLineWidth',2.5, ...
     'defaultLegendFontSize',13,'defaultLegendFontWeight','bold');
 figdir = fullfile(fileparts(fileparts(fileparts(mfilename('fullpath')))), 'figures', 'CH07');
+if remove_actuator_limits, figdir = fullfile(figdir,'exercise7_3_unconstrained'); end
 if ~exist(figdir, 'dir'), mkdir(figdir); end
 
 %% Figure A: tracking errors

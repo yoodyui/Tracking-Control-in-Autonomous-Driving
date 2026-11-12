@@ -1,44 +1,49 @@
-%Example3_3
-%This code shows the path generated from the continuous time and discrete
-%time Kinematic models are matched
+% Example 3.3: independent continuous-time and Euler trajectories.
+% The linear perturbation model is frozen at the initial nominal point,
+% as in the revised manuscript; it is not an LTV trajectory linearization.
 clc; clear; close all;
 run(fullfile(fileparts(fileparts(mfilename('fullpath'))), 'setup_paths.m'));
 
 %% Vehicle Parameters
-L = 3.0;          % Wheelbase (m)
-a_0 = 1.0;        % Nominal acceleration
-psi_0 = 0.1;      % Nominal yaw angle (rad)
-delta_0 = 5 * pi / 180;  % Nominal steering angle (rad)
+L = 3.0;
+v_0 = 10.0;
+a_0 = 0.0;
+psi_0 = 0.1;
+delta_0 = 5 * pi / 180;
 
 %% Initial Conditions
-X0_k = [0; 0; 0; 0]; % Initial state for kinematic model: [x; y; psi; v]
-X0_tilde = [0; 0; 0; 0]; % Initial state for perturbation model
+X0_k = [0; 0; psi_0; v_0];
+X0_tilde = [0; 0; 0; 0];
 
 %% Discrete-Time Simulation Parameters
-Ts = 0.1;         % Sampling time (s)
-T_final = 50;     % Total simulation time (s)
-N = floor(T_final / Ts);  % Number of discrete steps
-Tspan = (0:N-1) * Ts;  % Discrete time steps
+Ts = 0.1;
+T_final = 50;
+N = floor(T_final / Ts);
+Tspan = (0:N-1) * Ts;
 
 %% Define Input Signals
-U_k = [a_0*sin(0.03*Tspan); delta_0 + (1*pi/180)*sin(0.5*Tspan)];  % Acceleration and steering angle inputs
-U_nominal = [a_0 * ones(1, N); delta_0 * ones(1, N)]; % Nominal input for perturbation analysis
+U_k = [0.2*sin(0.03*Tspan); delta_0 + (1*pi/180)*sin(0.5*Tspan)];
+U_nominal = [a_0 * ones(1, N); delta_0 * ones(1, N)];
 
 %% Initialize State Storage
 X_k_d = zeros(4, N);
 X_k_c = zeros(4, N);
 X_tilde_d = zeros(4, N);
 X_tilde_c = zeros(4, N);
+X_k_d(:,1) = X0_k;
+X_k_c(:,1) = X0_k;
+X_tilde_d(:,1) = X0_tilde;
+X_tilde_c(:,1) = X0_tilde;
 
-%% Define State-Space Matrices (Nominal Model)
-A = [0, 0, -a_0*sin(psi_0), cos(psi_0);
-     0, 0,  a_0*cos(psi_0), sin(psi_0);
+%% Define State-Space Matrices (Perturbation Model, frozen at the initial nominal point)
+A = [0, 0, -v_0*sin(psi_0), cos(psi_0);
+     0, 0,  v_0*cos(psi_0), sin(psi_0);
      0, 0,  0, (1/L) * tan(delta_0);
      0, 0,  0, 0];
 
 B = [0, 0;
      0, 0;
-     0, (a_0/L) * sec(delta_0)^2;
+     0, (v_0/L) * sec(delta_0)^2;
      1, 0];
 
 %% Discretization (Euler Approximation)
@@ -47,23 +52,25 @@ B_d = Ts * B;
 
 %% Simulation Loop
 for k = 1:N-1
-    % Continuous-time Nonlinear Kinematic Model
-    [~, X_k] = ode45(@(t, X) kinematic_bicycle_model_2inputs(t, X, U_k(:,k:k+1), L), Tspan(k:k+1), X_k_d(:,k));
+    u = U_k(:,k);
+    [~, X_k] = ode45(@(t, X) kinematic_bicycle_model_2inputs(t, X, u, L), ...
+                     Tspan(k:k+1), X_k_c(:,k));
     X_k_c(:,k+1) = X_k(end,:)';
 
-    % Discrete-Time Kinematic Model
-    X_k_d(:,k+1) = X_k_d(:,k) + Ts * [X_k_d(4,k) * cos(X_k_d(3,k));
-                                       X_k_d(4,k) * sin(X_k_d(3,k));
-                                       (X_k_d(4,k)/L) * tan(U_k(2,k));
-                                       U_k(1,k)];
+    % Forward-Euler nonlinear kinematic update
+    x = X_k_d(:,k);
+    X_k_d(:,k+1) = x + Ts * [x(4)*cos(x(3));
+                             x(4)*sin(x(3));
+                             (x(4)/L)*tan(u(2));
+                             u(1)];
 
-    % Continuous-Time Perturbation Model
-    [~, X_tilde] = ode45(@(t, X) A * X + B * (U_k(:,k) - U_nominal(:,k)), Tspan(k:k+1), X_tilde_d(:,k));
+    u_tilde = u - U_nominal(:,k);
+    [~, X_tilde] = ode45(@(t, X) A * X + B * u_tilde, ...
+                         Tspan(k:k+1), X_tilde_c(:,k));
     X_tilde_c(:,k+1) = X_tilde(end,:)';
-
-    % Discrete-Time Perturbation Model
-    X_tilde_d(:,k+1) = A_d * X_tilde_d(:,k) + B_d * (U_k(:,k) - U_nominal(:,k));
+    X_tilde_d(:,k+1) = A_d * X_tilde_d(:,k) + B_d * u_tilde;
 end
+
 
 %% Plot Results
 figure;

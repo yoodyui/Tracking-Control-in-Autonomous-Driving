@@ -1,7 +1,7 @@
 % Example 6.5: PID + ILC (lateral-only learning) + PID speed control
 % u_j(k): nominal PID steering, uL_j(k): learned lateral FF,
 % delta_j(k) = u_j(k) + uL_j(k), e_j(k): cross-track error
-% Need a ZPF to stabilize the system
+% This scalar, unshifted update is an illustrative baseline, not a convergence guarantee.
 clear; clc; close all;
 run(fullfile(fileparts(fileparts(mfilename('fullpath'))), 'setup_paths.m'));
 
@@ -54,7 +54,7 @@ for j = 1:n_iter
     ev_prev = 0;       % previous speed error
 
     % Logs
-    e       = zeros(1, N);     % CTE
+    e_cte   = zeros(1, N);     % reset every lap; no stale tail samples
     theta_e = zeros(1, N);     % heading error
     ev      = zeros(1, N);     % speed error
 
@@ -114,14 +114,17 @@ for j = 1:n_iter
         end
     end
 
-    % Save iteration data
-    x_all{j} = x;
-    e_all{j} = e_cte;
-    rmse_cte(j) = sqrt(mean(e_cte.^2));   % RMSE for iteration j
+    % Record only samples executed on this lap. Keep uL on its fixed N grid.
+    K_final = k;
+    x_all{j} = x(:,1:K_final+1);
+    e_all{j} = e_cte(1:K_final);
+    rmse_cte(j) = sqrt(mean(e_cte(1:K_final).^2));
 
-    % ---------- ILC update (lateral FF only) ----------
-    % Learn from the CTE sequence (same horizon N)
-    uL = uL + L_ilc * e_cte;
+    % Learn only from observed samples; unvisited time indices are unchanged.
+    dU = zeros(1,N);
+    dU(1:K_final) = L_ilc * e_cte(1:K_final);
+    uL = uL + dU;
+
 end
 
 %% Plots: path tracking across iterations
